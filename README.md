@@ -92,3 +92,4 @@ Script logs include lines such as:
 - Uses both `page.on('request')` and `page.on('response')` to capture hidden media URLs.
 - Each course runs in isolation; one failed course does not stop the rest.
 - Works in headful mode (`headless: false`) for stability and visibility.
+# excel-scraper
