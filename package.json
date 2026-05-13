@@ -1,0 +1,23 @@
+{
+  "name": "excelcommunityliving-playwright-scraper",
+  "version": "1.0.0",
+  "description": "Playwright automation for course enrollment, progression, and media URL extraction.",
+  "main": "scrape.js",
+  "scripts": {
+    "start": "node scrape.js",
+    "debug": "node scrape.js --debug"
+  },
+  "keywords": [
+    "playwright",
+    "scraper",
+    "automation",
+    "tutorlms"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "csv-writer": "^1.6.0",
+    "dotenv": "^16.4.5",
+    "playwright": "^1.54.0"
+  }
+}
