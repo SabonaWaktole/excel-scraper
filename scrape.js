@@ -622,6 +622,10 @@ async function collectCourseLinks(page) {
   console.log(`Course listing: ${totalPages} page(s) to scan`);
 
   for (let p = 1; p <= totalPages; p += 1) {
+    if (p > 1) {
+      console.log(`Waiting a few seconds before loading page ${p}...`);
+      await page.waitForTimeout(3000 + Math.random() * 2000); // 3-5 second delay
+    }
     const pageUrl = mergeCourseListingPageUrl(startUrl, p);
     await safeGoto(page, pageUrl, `courses listing page ${p}/${totalPages}`);
     await page.locator(".tutor-course-filter-loop-container").waitFor({ state: "attached", timeout: 25000 }).catch(() => {});
@@ -865,12 +869,33 @@ async function extractReadableLessonText(page, opts = {}) {
       ];
       const seen = new Set();
       let combined = "";
+      const junkSelectors = [
+        "script", "style", "header", "nav", "footer", "aside", "iframe",
+        ".wp-block-navigation", ".tutor-course-filter", ".tutor-course-sidebar",
+        ".tutor-single-course-sidebar", ".tutor-lesson-sidebar", ".tutor-course-single-sidebar",
+        ".sidebar", "#sidebar", "meta", "form",
+        ".tutor-topbar", ".tutor-lesson-topbar", ".tutor-pagination", 
+        ".tutor-next-previous-pagination", ".tutor-course-topic-list", 
+        ".tutor-course-content-list", ".tutor-progress-bar", 
+        ".tutor-lesson-progress", ".tutor-segment-progress", 
+        ".tutor-course-details-header", ".tutor-lesson-footer",
+        ".tutor-course-topic-title", ".tutor-lesson-title", ".tutor-segment-title", ".tutor-course-title"
+      ].join(", ");
+
+      const processClone = (clone) => {
+        clone.querySelectorAll(junkSelectors).forEach((n) => n.remove());
+        clone.querySelectorAll("strong, b").forEach(el => {
+          const t = el.innerText || el.textContent || "";
+          if (t.trim()) el.innerText = `**${t.trim()}**`;
+        });
+        return (clone.innerText || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+      };
+
       for (const sel of selectors) {
         const el = document.querySelector(sel);
         if (!el) continue;
         const clone = el.cloneNode(true);
-        clone.querySelectorAll("script, style, nav, footer, iframe, .wp-block-navigation, .tutor-course-filter").forEach((n) => n.remove());
-        const text = (clone.innerText || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+        const text = processClone(clone);
         const key = text.slice(0, 120);
         if (text.length > 30 && !seen.has(key)) {
           seen.add(key);
@@ -881,8 +906,7 @@ async function extractReadableLessonText(page, opts = {}) {
         const main = document.querySelector("main") || document.querySelector("#content") || document.body;
         if (main) {
           const clone = main.cloneNode(true);
-          clone.querySelectorAll("script, style, header, nav, footer").forEach((n) => n.remove());
-          combined = (clone.innerText || "").replace(/[ \t]+\n/g, "\n").replace(/\n{3,}/g, "\n\n").trim();
+          combined = processClone(clone);
         }
       }
       return combined.slice(0, 500000);
@@ -928,30 +952,28 @@ function buildLessonFileBody(lessonTitle, textBody, videoUrls) {
   const hasText = textTrim.length >= 25;
   const hasVideo = videoUrls.length > 0;
 
-  let out = `Lesson Title: ${lessonTitle}\n\n`;
+  let out = "";
 
   if (hasVideo && !hasText) {
     out += "Video URL:\n";
     videoUrls.forEach((u) => {
       out += `${u}\n`;
     });
-    return out.trimEnd();
+    return out.trim();
   }
 
   if (hasText && !hasVideo) {
-    out += "Content:\n\n";
     out += textTrim;
-    return out.trimEnd();
+    return out.trim();
   }
 
   if (hasText && hasVideo) {
-    out += "Content:\n\n";
     out += textTrim;
     out += "\n\nVideo URL(s):\n";
     videoUrls.forEach((u) => {
       out += `${u}\n`;
     });
-    return out.trimEnd();
+    return out.trim();
   }
 
   if (hasVideo) {
@@ -959,12 +981,11 @@ function buildLessonFileBody(lessonTitle, textBody, videoUrls) {
     videoUrls.forEach((u) => {
       out += `${u}\n`;
     });
-    return out.trimEnd();
+    return out.trim();
   }
 
-  out += "Content:\n\n";
   out += textTrim || "(No extractable text or verified video URL for this lesson.)";
-  return out.trimEnd();
+  return out.trim();
 }
 
 function isJunkLessonTitleBase(titleBase) {
@@ -991,54 +1012,171 @@ function displayLessonTitleForBody(rawTitle, lessonPageUrl) {
   return rawTitle;
 }
 
-/**
- * Lesson .txt path: normal titles use sanitized title (+ __slug on collision).
- * Junk titles (e.g. Insert_edit_link) use NN.txt or NN__slug.txt with the same collision rules.
- */
-function resolveLessonDestPath(courseDir, lessonTitle, lessonPageUrl, titleSlugClaimMap, junkCounterRef) {
-  const titleBase = sanitizeFileBase(lessonTitle);
+function resolveLessonDestPath(courseDir, lessonTitle, lessonPageUrl, titleSlugClaimMap, lessonCounterRef) {
+  lessonCounterRef.n += 1;
+  const num = lessonCounterRef.n;
   const slug = sanitizeFileBase(lessonSlugFromUrl(lessonPageUrl));
-  const owner = titleSlugClaimMap.get(titleBase);
-  const claimsBase = owner === undefined || owner === slug;
-
-  if (!isJunkLessonTitleBase(titleBase)) {
-    if (claimsBase) {
-      titleSlugClaimMap.set(titleBase, slug);
-      return path.join(courseDir, `${titleBase}.txt`);
-    }
-    return path.join(courseDir, `${titleBase}__${slug}.txt`);
-  }
-
-  junkCounterRef.n += 1;
-  const nn = String(junkCounterRef.n).padStart(2, "0");
-  if (claimsBase) {
-    titleSlugClaimMap.set(titleBase, slug);
-    return path.join(courseDir, `${nn}.txt`);
-  }
-  return path.join(courseDir, `${nn}__${slug}.txt`);
+  return path.join(courseDir, `${num}_${slug}.txt`);
 }
 
-async function saveLessonArtifact(courseName, page, lessonPageUrl, titleSlugClaimMap, junkCounterRef) {
-  const folder = sanitizeFolderName(courseName);
-  const courseDir = path.join(OUTPUT_DIR, folder);
-  fs.mkdirSync(courseDir, { recursive: true });
+function cleanExtractedText(rawText) {
+  let text = rawText || "";
+  
+  // Cut everything before and including the Progress percentage (e.g., "(0%)")
+  const progressMatch = text.match(/Your Progress:[\s\S]*?\(\d+%\)/i);
+  if (progressMatch) {
+    const startIndex = progressMatch.index + progressMatch[0].length;
+    text = text.slice(startIndex);
+  }
 
-  const lessonTitleRaw = await extractLessonTitle(page, lessonPageUrl);
+  // Find the end markers: "Previous", "Next", "X% Complete"
+  const endMarkers = [
+    /\n\s*Previous\s*(?:\n|$)/i,
+    /\n\s*Next\s*(?:\n|$)/i,
+    /\n\s*\d+% Complete\s*(?:\n|$)/i
+  ];
+
+  let earliestEndIndex = text.length;
+  for (const marker of endMarkers) {
+    const match = text.match(marker);
+    if (match && match.index < earliestEndIndex) {
+      earliestEndIndex = match.index;
+    }
+  }
+
+  text = text.slice(0, earliestEndIndex);
+
+  // Filter out missing info placeholders like [Address Not Provided] or <phone>
+  text = text.split('\n').filter(line => {
+    const trimmed = line.trim();
+    if (/^\[.*?Not Provided\]$/i.test(trimmed)) {
+      return false;
+    }
+    if (/^<phone>$/i.test(trimmed)) {
+      return false;
+    }
+    return true;
+  }).join('\n');
+
+  // Strip excessive leading tabs from lines
+  text = text.split('\n').map(line => line.replace(/^\t+/, '')).join('\n');
+
+  return text.trim();
+}
+
+async function saveLessonArtifact(courseName, page, lessonPageUrl, mergeState, preCollectedTexts) {
+  const { courseDir } = mergeState;
+  
+  const slug = sanitizeFileBase(lessonSlugFromUrl(lessonPageUrl));
+
+  const pdfLinks = await page.evaluate(() => {
+    const links = [];
+    document.querySelectorAll('a[href]').forEach(a => {
+      if (a.href.toLowerCase().endsWith('.pdf') || a.href.toLowerCase().includes('.pdf?')) {
+        links.push(a.href);
+      }
+    });
+    document.querySelectorAll('iframe[src]').forEach(f => {
+      if (f.src.toLowerCase().endsWith('.pdf') || f.src.toLowerCase().includes('.pdf?')) {
+        links.push(f.src);
+      }
+    });
+    return Array.from(new Set(links));
+  });
+
   let videoUrls = [];
   try {
     videoUrls = await gatherLessonVideoUrls(page);
   } catch {
     videoUrls = [];
   }
-  const isQuizPage = (await page.locator(".tutor-quiz-single-wrap").count()) > 0;
-  const tutorBodySlice = videoUrls.length === 0 && !isQuizPage;
-  const textBody = await extractReadableLessonText(page, { tutorBodySlice });
 
-  const destPath = resolveLessonDestPath(courseDir, lessonTitleRaw, lessonPageUrl, titleSlugClaimMap, junkCounterRef);
-  const titleForBody = displayLessonTitleForBody(lessonTitleRaw, lessonPageUrl);
-  const body = buildLessonFileBody(titleForBody, textBody, videoUrls);
-  fs.writeFileSync(destPath, `${body}\n`, "utf8");
-  console.log(`Saved lesson file: ${destPath}`);
+  const hasVideo = videoUrls.length > 0;
+  const hasPdf = pdfLinks.length > 0;
+
+  if (hasVideo || hasPdf) {
+    // Both videos and PDFs act as separators for the text buffer
+    mergeState.flushText();
+  }
+
+  if (hasPdf) {
+    let pdfSaved = false;
+    for (let i = 0; i < pdfLinks.length; i++) {
+      const pdfUrl = pdfLinks[i];
+      try {
+        const res = await fetch(pdfUrl);
+        if (res.ok) {
+          if (!pdfSaved) {
+            mergeState.globalCounter++;
+            pdfSaved = true;
+          }
+          const buffer = await res.arrayBuffer();
+          const pdfDest = pdfLinks.length === 1 
+            ? path.join(courseDir, `${mergeState.globalCounter}_${slug}.pdf`)
+            : path.join(courseDir, `${mergeState.globalCounter}_${slug}_${i+1}.pdf`);
+          fs.writeFileSync(pdfDest, Buffer.from(buffer));
+          console.log(`Downloaded PDF: ${pdfDest}`);
+        }
+      } catch (e) {
+        console.log(`Failed to download PDF: ${pdfUrl} - ${e.message}`);
+      }
+    }
+  }
+
+  if (hasVideo) {
+    mergeState.globalCounter++;
+    const filename = `${mergeState.globalCounter}_${slug}_video.txt`;
+    const destPath = path.join(courseDir, filename);
+    
+    // Contain ONLY the video URL/link
+    const videoContent = videoUrls.join('\n');
+    fs.writeFileSync(destPath, videoContent + "\n", "utf8");
+    console.log(`Saved video file: ${destPath}`);
+    
+    mergeState.videoCounter++;
+  }
+
+  if (!hasVideo && !hasPdf) {
+    // Use pre-collected slide texts if available, otherwise extract from current page
+    let combinedBody;
+    if (preCollectedTexts && preCollectedTexts.length > 0) {
+      // Deduplicate slide texts and combine
+      const uniqueSlides = [];
+      const slideSeen = new Set();
+      for (let t of preCollectedTexts) {
+        // Strip repeating course title from the top of the slide
+        if (t.startsWith(courseName)) {
+          t = t.substring(courseName.length).trim();
+        }
+        const key = t.slice(0, 300).trim();
+        if (key && !slideSeen.has(key)) {
+          slideSeen.add(key);
+          uniqueSlides.push(t);
+        }
+      }
+      combinedBody = uniqueSlides.join('\n\n');
+    } else {
+      const isQuizPage = (await page.locator(".tutor-quiz-single-wrap").count()) > 0;
+      const tutorBodySlice = !isQuizPage;
+      let textBody = await extractReadableLessonText(page, { tutorBodySlice });
+      textBody = cleanExtractedText(textBody);
+      if (textBody.startsWith(courseName)) {
+        textBody = textBody.substring(courseName.length).trim();
+      }
+      combinedBody = textBody;
+    }
+
+    // Add the course name once at the very top of the lesson if it's not already there
+    const body = combinedBody.trim() || "(No extractable text)";
+    const finalBody = `${courseName}\n\n${body}`;
+    
+    // Deduplicate: skip if identical content was already scraped
+    const contentKey = finalBody.slice(0, 300).trim();
+    if (body !== "(No extractable text)" && !mergeState.seenContent.has(contentKey)) {
+      mergeState.seenContent.add(contentKey);
+      mergeState.currentTextBody.push(finalBody);
+    }
+  }
 }
 
 async function collectLessonLinks(page) {
@@ -1133,10 +1271,31 @@ async function processCourse(context, url, index, total) {
     seedLessons.forEach(queueLesson);
     queueLesson(page.url());
 
-    const lessonFileTitleMap = new Map();
-    const junkLessonCounterRef = { n: 0 };
+    const mergeState = {
+      courseDir: courseOutDir,
+      globalCounter: 0,
+      textPartCounter: 1,
+      videoCounter: 1,
+      lessonIndex: 0,
+      currentTextBody: [],
+      seenContent: new Set(),
+      flushText: function() {
+        if (this.currentTextBody.length > 0) {
+          this.globalCounter++;
+          const filename = `${this.globalCounter}_part_${this.textPartCounter}.txt`;
+          const destPath = path.join(this.courseDir, filename);
+          const sep = "\n\n\n\n";
+          fs.writeFileSync(destPath, this.currentTextBody.join(sep) + "\n", "utf8");
+          console.log(`Saved merged text file: ${destPath}`);
+          
+          this.currentTextBody = [];
+          this.textPartCounter++;
+        }
+      }
+    };
 
     let noProgressCycles = 0;
+    try {
     while (visitedLessons.size < MAX_COURSE_STEPS) {
       // If queue is empty, try to reveal more lessons via scrolling/progress button.
       if (lessonQueue.length === 0) {
@@ -1163,6 +1322,23 @@ async function processCourse(context, url, index, total) {
       visitedLessons.add(lessonUrl);
       await autoScroll(page, 3);
 
+      // Collect text from each slide BEFORE clicking Next
+      const slideTexts = [];
+      const captureSlideText = async () => {
+        try {
+          const isQuizPage = (await page.locator(".tutor-quiz-single-wrap").count()) > 0;
+          const tutorBodySlice = !isQuizPage;
+          let textBody = await extractReadableLessonText(page, { tutorBodySlice });
+          textBody = cleanExtractedText(textBody);
+          if (textBody.trim().length >= 25) {
+            slideTexts.push(textBody.trim());
+          }
+        } catch {}
+      };
+
+      // Capture initial slide text
+      await captureSlideText();
+
       // Capture URLs and attempt to complete/proceed within each lesson.
       for (let step = 0; step < 8; step += 1) {
         const discovered = await extractUrlsFromPageAndFrames(page);
@@ -1186,17 +1362,25 @@ async function processCourse(context, url, index, total) {
         await page.waitForTimeout(900);
         await autoScroll(page, 2);
 
+        // Capture text from the new slide after clicking
+        await captureSlideText();
+
         const currentAfterClick = normalizePageUrl(page.url());
         if (currentAfterClick !== currentBeforeClick) {
           queueLesson(currentAfterClick);
+          break; // Stop treating this as a slide if we navigated to a new lesson!
         }
       }
 
       try {
-        await saveLessonArtifact(courseName, page, lessonUrl, lessonFileTitleMap, junkLessonCounterRef);
+        await saveLessonArtifact(courseName, page, lessonUrl, mergeState, slideTexts);
       } catch (err) {
         console.log(`Lesson file save failed (${lessonUrl}): ${err.message}`);
       }
+    }
+    } finally {
+      // Flush any remaining accumulated text lessons (even on crash)
+      mergeState.flushText();
     }
 
     // Final pass on the current page to avoid missing late-loaded media.
@@ -1243,8 +1427,14 @@ async function run() {
     const courseLinks = await collectCourseLinks(page);
     console.log(`Found ${courseLinks.length} courses`);
 
-    const uniqueCourseLinks = Array.from(new Set(courseLinks));
+    let uniqueCourseLinks = Array.from(new Set(courseLinks));
+    uniqueCourseLinks = uniqueCourseLinks.filter(u => /implementing.*community.*fall.*prevention/i.test(u) || /how.*plan.*workplace.*emergencies/i.test(u));
+    
     for (let i = 0; i < uniqueCourseLinks.length; i += 1) {
+      if (i > 0) {
+        console.log(`Waiting 5 seconds before starting the next course...`);
+        await page.waitForTimeout(5000);
+      }
       await processCourse(context, uniqueCourseLinks[i], i, uniqueCourseLinks.length);
     }
 
